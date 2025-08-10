@@ -6916,7 +6916,16 @@ EOF
 trans() {
     info "start trans"
 
-    mod_motd
+    mod_motd    
+    # 先检查 modloop 是否正常
+    # 防止格式化硬盘后，缺少 ext4 模块导致 mount 失败
+    # https://github.com/bin456789/reinstall/issues/136
+    ensure_service_started modloop
+    # 关键修复：将 find_xda 移动到所有磁盘操作之前
+    if [ -z "$xda" ]; then
+        find_xda
+    fi
+
     # 检查是否为 DDLinux 模式
     if [ "$is_ddlinux" = 1 ]; then
         info "DDLinux Mode: Starting disk operations."
@@ -6930,7 +6939,7 @@ trans() {
         fi
 
         # === 危险操作警告 ===
-        echo "‼️ 警告：即将清空 $xda 并写入镜像..."
+        echo "‼️ 警告：即将清空 /dev/$xda 并写入镜像..."
         sleep 3
 
         # === 流式解压并直接写入镜像 (最终修复版) ===
@@ -6945,7 +6954,7 @@ trans() {
             DECOMPRESS_CMD="xz -dc \"$COMPRESSED_FILE\""
         elif echo "$img" | grep -q '\.zst$'; then
             apk add --no-cache zstd
-            DECOMPRES_CMD="zstd -dc \"$COMPRESSED_FILE\""
+            DECOMPRESS_CMD="zstd -dc \"$COMPRESSED_FILE\""
         else
             # 假设是未压缩的 raw 镜像
             DECOMPRESS_CMD="cat \"$COMPRESSED_FILE\""
@@ -7104,11 +7113,6 @@ trans() {
         exit 0
     fi
     
-    # 先检查 modloop 是否正常
-    # 防止格式化硬盘后，缺少 ext4 模块导致 mount 失败
-    # https://github.com/bin456789/reinstall/issues/136
-    ensure_service_started modloop
-
     cat /proc/cmdline
     clear_previous
     add_community_repo
@@ -7116,9 +7120,7 @@ trans() {
     # 需要在重新分区之前，找到主硬盘
     # 重新运行脚本时，可指定 xda
     # xda=sda ash trans.start
-    if [ -z "$xda" ]; then
-        find_xda
-    fi
+
 
     if [ "$distro" != "alpine" ]; then
         setup_web_if_enough_ram
