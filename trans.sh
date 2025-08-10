@@ -6921,30 +6921,29 @@ trans() {
     # 防止格式化硬盘后，缺少 ext4 模块导致 mount 失败
     # https://github.com/bin456789/reinstall/issues/136
     ensure_service_started modloop
-    # 关键修复：将 find_xda 移动到所有磁盘操作之前
     if [ -z "$xda" ]; then
         find_xda
     fi
-
+    
     # 检查是否为 DDLinux 模式
     if [ "$is_ddlinux" = 1 ]; then
         info "DDLinux Mode: Starting disk operations."
-
+    
         # === 下载镜像文件 ===
         info ">>> 正在下载镜像文件: $img"
         COMPRESSED_FILE="/tmp/image.compressed"
-
+    
         if ! wget "$img" -O "$COMPRESSED_FILE" --no-check-certificate; then
             error_and_exit "镜像文件下载失败！"
         fi
-
+    
         # === 危险操作警告 ===
         echo "‼️ 警告：即将清空 /dev/$xda 并写入镜像..."
         sleep 3
-
+    
         # === 流式解压并直接写入镜像 (最终修复版) ===
         info ">>> 开始解压并写入镜像 (流式处理)..."
-
+    
         DECOMPRESS_CMD=""
         # 根据文件扩展名判断解压命令
         if echo "$img" | grep -q '\.gz$'; then
@@ -6956,50 +6955,55 @@ trans() {
             apk add --no-cache zstd
             DECOMPRESS_CMD="zstd -dc \"$COMPRESSED_FILE\""
         else
-            # 假设是未压缩的 raw 镜像
             DECOMPRESS_CMD="cat \"$COMPRESSED_FILE\""
         fi
-
-        # 执行流式写入，移除不支持的 status=progress 参数
+    
+        # 执行流式写入
         if ! eval "$DECOMPRESS_CMD" | dd of="/dev/$xda" bs=4M conv=fsync; then
              error_and_exit "DD 写入镜像失败！"
         fi
-
-        # 清理下载的压缩包和解压工具
+    
+        # 清理
         rm "$COMPRESSED_FILE"
         if echo "$img" | grep -q '\.xz$'; then apk del xz; fi
         if echo "$img" | grep -q '\.zst$'; then apk del zstd; fi
-
         sync
-
-        # === 更新分区表信息 ===
+    
+        # === 强制内核重新读取分区表 (关键修复) ===
+        info ">>> 刷新分区表..."
         update_part
-
+        partprobe "/dev/$xda" || true
+        sleep 2 # 等待内核更新
+    
         # === 修复 GPT 分区表 ===
         info ">>> 修复 GPT 分区表..."
         apk add --no-cache sgdisk
         sgdisk -e "/dev/$xda"
         apk del sgdisk
+    
+        # 再次刷新以确保所有变更生效
         update_part
-
-        # 自动识别 EFI 分区和根分区（默认 EFI 是第1分区，根分区是第2分区）
+        partprobe "/dev/$xda" || true
+        sleep 2
+    
+        # 自动识别 EFI 分区和根分区
         BOOT_PART="/dev/${xda}1"
         ROOT_PART="/dev/${xda}2"
-
+    
         # 检查分区是否存在
         if ! lsblk "$BOOT_PART" >/dev/null 2>&1; then
-            error_and_exit "错误：EFI分区 $BOOT_PART 不存在！"
+            error_and_exit "错误：刷新后依然无法找到 EFI 分区 $BOOT_PART！"
         fi
         if ! lsblk "$ROOT_PART" >/dev/null 2>&1; then
-            error_and_exit "错误：根分区 $ROOT_PART 不存在！"
+            error_and_exit "错误：刷新后依然无法找到根分区 $ROOT_PART！"
         fi
-
+    
         # 扩展根分区到最大
         info ">>> 扩展根分区..."
         parted "/dev/$xda" resizepart 2 100% --script
         sync
-        update_part
-
+        update_part; partprobe "/dev/$xda" || true; sleep 2
+    
         # 扩容文件系统
         fs_type=$(blkid -o value -s TYPE "$ROOT_PART")
         info "检测到根分区文件系统: $fs_type"
@@ -7032,7 +7036,7 @@ trans() {
                 warn "未知或不支持的文件系统类型，跳过扩容"
                 ;;
         esac
-
+    
         # === 修改 UUID ===
         info ">>> 更新文件系统 UUID..."
         if [ "$fs_type" = "ext4" ]; then
@@ -7048,18 +7052,18 @@ trans() {
             btrfstune -u "$ROOT_PART"
             apk del btrfs-progs
         fi
-
+    
         NEW_EFI_UUID=$(blkid -s UUID -o value "$BOOT_PART")
         NEW_ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
         info "新的根UUID: $NEW_ROOT_UUID"
         info "新的EFI UUID: $NEW_EFI_UUID"
-
+    
         # === 挂载新系统 ===
         TEMP_ROOT=$(mktemp -d)
         mount "$ROOT_PART" "$TEMP_ROOT"
         mkdir -p "$TEMP_ROOT/boot/efi"
         mount "$BOOT_PART" "$TEMP_ROOT/boot/efi"
-
+    
         # === 更新 grub.cfg 中 UUID ===
         info ">>> 更新 grub.cfg..."
         for cfg in "$TEMP_ROOT/boot/efi/EFI"/*/grub.cfg "$TEMP_ROOT/boot/grub/grub.cfg"; do
@@ -7069,7 +7073,7 @@ trans() {
                 info "已更新 $cfg"
             fi
         done
-
+    
         # === 更新 fstab 中 UUID ===
         FSTAB_FILE="$TEMP_ROOT/etc/fstab"
         info ">>> 更新 fstab..."
@@ -7083,7 +7087,7 @@ trans() {
             fi
             info "已更新 $FSTAB_FILE"
         fi
-
+    
         # === 重装 GRUB ===
         BOOTLOADER_ID="ReinstalledOS"
         info ">>> 安装 grub 引导..."
@@ -7093,7 +7097,7 @@ trans() {
         chroot "$TEMP_ROOT" grub-mkconfig -o /boot/grub/grub.cfg
         apk del grub-efi efibootmgr
         umount_pseudo_fs "$TEMP_ROOT"
-
+    
         # === 清理多余 EFI 启动项 ===
         info ">>> 清理 EFI 启动项..."
         BOOT_ENTRY=$(efibootmgr | grep -i "$BOOTLOADER_ID" | head -n1 | awk '{print $1}' | sed 's/Boot//;s/\*//')
@@ -7101,11 +7105,11 @@ trans() {
             efibootmgr -n "$BOOT_ENTRY"
             info "设置下一次启动项为: Boot$BOOT_ENTRY"
         fi
-
+    
         umount "$TEMP_ROOT/boot/efi"
         umount "$TEMP_ROOT"
         rmdir "$TEMP_ROOT"
-
+    
         info "✅ DDLinux 操作完成！系统即将重启。"
         info "done"
         sleep 5
