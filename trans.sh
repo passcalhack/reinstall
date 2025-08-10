@@ -6923,45 +6923,45 @@ trans() {
 
         # === 下载镜像文件 ===
         info ">>> 正在下载镜像文件: $img"
-        LOCAL_IMG_FILE="/tmp/local_image.img"
-        COMPRESSED_FILE="${LOCAL_IMG_FILE}.compressed"
+        COMPRESSED_FILE="/tmp/image.compressed"
 
         if ! wget "$img" -O "$COMPRESSED_FILE" --no-check-certificate; then
             error_and_exit "镜像文件下载失败！"
         fi
 
-        info ">>> 如有需要，正在解压镜像..."
-        if echo "$img" | grep -q '\.gz$'; then
-            gzip -dc "$COMPRESSED_FILE" > "$LOCAL_IMG_FILE"
-        elif echo "$img" | grep -q '\.xz$'; then
-            apk add --no-cache xz
-            xz -dc "$COMPRESSED_FILE" > "$LOCAL_IMG_FILE"
-            apk del xz
-        elif echo "$img" | grep -q '\.zst$'; then
-            apk add --no-cache zstd
-            zstd -dc "$COMPRESSED_FILE" > "$LOCAL_IMG_FILE"
-            apk del zstd
-        else
-            # 假设是未压缩的 raw 镜像
-            mv "$COMPRESSED_FILE" "$LOCAL_IMG_FILE"
-        fi
-        rm "$COMPRESSED_FILE"
-
         # === 危险操作警告 ===
         echo "‼️ 警告：即将清空 $xda 并写入镜像..."
         sleep 3
 
-        # === 流式解压并直接写入镜像 (已移除 status=progress) ===
-        info ">>> 开始写入镜像..."
-        dd if="$LOCAL_IMG_FILE" of="/dev/$xda" bs=4M conv=fsync
+        # === 流式解压并直接写入镜像 (最终修复版) ===
+        info ">>> 开始解压并写入镜像 (流式处理)..."
 
-        # 检查 dd 命令是否成功
-        if [ $? -ne 0 ]; then
-            error_and_exit "DD 写入镜像失败！"
+        DECOMPRESS_CMD=""
+        # 根据文件扩展名判断解压命令
+        if echo "$img" | grep -q '\.gz$'; then
+            DECOMPRESS_CMD="gzip -dc \"$COMPRESSED_FILE\""
+        elif echo "$img" | grep -q '\.xz$'; then
+            apk add --no-cache xz
+            DECOMPRESS_CMD="xz -dc \"$COMPRESSED_FILE\""
+        elif echo "$img" | grep -q '\.zst$'; then
+            apk add --no-cache zstd
+            DECOMPRES_CMD="zstd -dc \"$COMPRESSED_FILE\""
+        else
+            # 假设是未压缩的 raw 镜像
+            DECOMPRESS_CMD="cat \"$COMPRESSED_FILE\""
         fi
 
+        # 执行流式写入，移除不支持的 status=progress 参数
+        if ! eval "$DECOMPRESS_CMD" | dd of="/dev/$xda" bs=4M conv=fsync; then
+             error_and_exit "DD 写入镜像失败！"
+        fi
+
+        # 清理下载的压缩包和解压工具
+        rm "$COMPRESSED_FILE"
+        if echo "$img" | grep -q '\.xz$'; then apk del xz; fi
+        if echo "$img" | grep -q '\.zst$'; then apk del zstd; fi
+
         sync
-        rm "$LOCAL_IMG_FILE"
 
         # === 更新分区表信息 ===
         update_part
