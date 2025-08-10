@@ -65,6 +65,7 @@ Usage: $reinstall_____ anolis      7|8|23
                        fnos
                        redhat      --img="http://access.cdn.redhat.com/xxx.qcow2"
                        dd          --img="http://xxx.com/yyy.zzz" (raw image stores in raw/vhd/tar/gz/xz/zst)
+                       ddlinux     --img="http://xxx.com/yyy.zzz" (raw image stores in raw/vhd/tar/gz/xz/zst)
                        windows     --image-name="windows xxx yyy" --lang=xx-yy
                        windows     --image-name="windows xxx yyy" --iso="http://xxx.com/xxx.iso"
                        netboot.xyz
@@ -1854,6 +1855,7 @@ verify_os_name() {
         'fnos' \
         'windows' \
         'dd' \
+        'ddlinux' \
         'netboot.xyz'; do
         read -r ds vers <<<"$os"
         vers_=${vers//\./\\\.}
@@ -1875,6 +1877,7 @@ verify_os_name() {
 verify_os_args() {
     case "$distro" in
     dd) [ -n "$img" ] || error_and_exit "dd need --img" ;;
+    ddlinux) [ -n "$img" ] || error_and_exit "ddlinux need --img" ;
     redhat) [ -n "$img" ] || error_and_exit "redhat need --img" ;;
     windows) [ -n "$image_name" ] || error_and_exit "Install Windows need --image-name." ;;
     esac
@@ -4000,6 +4003,11 @@ verify_os_name "$@"
 # 检查必须的参数
 verify_os_args
 
+if [ "$distro" = "ddlinux" ]; then
+    is_ddlinux=1 # 设置一个标志，给 trans.sh 使用
+    distro=alpine
+    hold=1
+fi
 # 不支持容器虚拟化
 assert_not_in_container
 
