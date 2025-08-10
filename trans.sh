@@ -6923,37 +6923,40 @@ trans() {
 
         # === 下载镜像文件 ===
         info ">>> 正在下载镜像文件: $img"
-        LOCAL_IMG_FILE="/tmp/local_image.img"
-        COMPRESSED_FILE="${LOCAL_IMG_FILE}.compressed"
+        COMPRESSED_FILE="/tmp/image.compressed"
 
-        # 此处的 wget 将调用我们修改过的函数，自动跳过证书验证
-        if ! wget "$img" -O "$COMPRESSED_FILE"; then
+        if ! wget "$img" -O "$COMPRESSED_FILE" --no-check-certificate; then
             error_and_exit "镜像文件下载失败！"
         fi
-        info ">>> 如有需要，正在解压镜像..."
-        if echo "$img" | grep -q '\.gz$'; then
-            gzip -dc "$LOCAL_IMG_FILE.compressed" > "$LOCAL_IMG_FILE"
-        elif echo "$img" | grep -q '\.xz$'; then
-            apk add --no-cache xz
-            xz -dc "$LOCAL_IMG_FILE.compressed" > "$LOCAL_IMG_FILE"
-        elif echo "$img" | grep -q '\.zst$'; then
-            apk add --no-cache zstd
-            zstd -dc "$LOCAL_IMG_FILE.compressed" > "$LOCAL_IMG_FILE"
-        else
-            # 假设是未压缩的 raw 镜像
-            mv "$LOCAL_IMG_FILE.compressed" "$LOCAL_IMG_FILE"
-        fi
-        rm "$LOCAL_IMG_FILE.compressed"
 
         # === 危险操作警告 ===
         echo "‼️ 警告：即将清空 $xda 并写入镜像..."
-        sleep 3 # 给 3 秒反悔时间
+        sleep 3
 
-        # === 直接写入镜像 ===
-        info ">>> 开始写入镜像..."
-        dd if="$LOCAL_IMG_FILE" of="/dev/$xda" bs=4M status=progress conv=fsync
+        # === 流式解压并直接写入镜像 ===
+        info ">>> 开始解压并写入镜像..."
+        if echo "$img" | grep -q '\.gz$'; then
+            gzip -dc "$COMPRESSED_FILE" | dd of="/dev/$xda" bs=4M status=progress conv=fsync
+        elif echo "$img" | grep -q '\.xz$'; then
+            apk add --no-cache xz
+            xz -dc "$COMPRESSED_FILE" | dd of="/dev/$xda" bs=4M status=progress conv=fsync
+            apk del xz
+        elif echo "$img" | grep -q '\.zst$'; then
+            apk add --no-cache zstd
+            zstd -dc "$COMPRESSED_FILE" | dd of="/dev/$xda" bs=4M status=progress conv=fsync
+            apk del zstd
+        else
+            # 假设是未压缩的 raw 镜像
+            dd if="$COMPRESSED_FILE" of="/dev/$xda" bs=4M status=progress conv=fsync
+        fi
+
+        # 检查 dd 命令是否成功
+        if [ $? -ne 0 ]; then
+            error_and_exit "DD 写入镜像失败！"
+        fi
+
         sync
-        rm "$LOCAL_IMG_FILE" # 删除镜像文件以释放空间
+        rm "$COMPRESSED_FILE" # 删除已下载的压缩文件以释放空间
 
         # === 更新分区表信息 ===
         update_part
@@ -7068,7 +7071,7 @@ trans() {
         fi
 
         # === 重装 GRUB ===
-        BOOTLOADER_ID="ReinstalledOS" # 使用一个通用的ID
+        BOOTLOADER_ID="ReinstalledOS"
         info ">>> 安装 grub 引导..."
         mount_pseudo_fs "$TEMP_ROOT"
         apk add --no-cache grub-efi efibootmgr
@@ -7093,7 +7096,7 @@ trans() {
         info "done"
         sleep 5
         reboot
-        exit 0 # 任务完成，正常退出
+        exit 0
     fi
     
     # 先检查 modloop 是否正常
