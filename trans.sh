@@ -6917,7 +6917,147 @@ trans() {
     info "start trans"
 
     mod_motd
+    # 检查是否为 DDLinux 模式
+    if [ "$is_ddlinux" = 1 ]; then
+        info "DDLinux Mode: Starting disk operations."
 
+        # === 危险操作警告 ===
+        echo "‼️ 警告：即将清空 $xda 并写入镜像..."
+        sleep 3 # 给 3 秒反悔时间
+
+        # === 直接写入镜像 ===
+        info ">>> 开始写入镜像..."
+        if echo "$img" | grep -q '\.gz$'; then
+            gzip -dc "$img" | dd of="/dev/$xda" bs=4M status=progress conv=fsync
+        else
+            dd if="$img" of="/dev/$xda" bs=4M status=progress conv=fsync
+        fi
+        sync
+
+        # === 更新分区表信息 ===
+        update_part
+
+        # === 修复 GPT 分区表 ===
+        info ">>> 修复 GPT 分区表..."
+        sgdisk -e "/dev/$xda"
+        update_part
+
+        # 自动识别 EFI 分区和根分区（默认 EFI 是第1分区，根分区是第2分区）
+        BOOT_PART="/dev/${xda}1"
+        ROOT_PART="/dev/${xda}2"
+
+        # 检查分区是否存在
+        if ! lsblk "$BOOT_PART" >/dev/null 2>&1; then
+            error_and_exit "错误：EFI分区 $BOOT_PART 不存在！"
+        fi
+        if ! lsblk "$ROOT_PART" >/dev/null 2>&1; then
+            error_and_exit "错误：根分区 $ROOT_PART 不存在！"
+        fi
+
+        # 扩展根分区到最大
+        info ">>> 扩展根分区..."
+        parted "/dev/$xda" resizepart 2 100% --script
+        sync
+        update_part
+
+        # 扩容文件系统
+        fs_type=$(blkid -o value -s TYPE "$ROOT_PART")
+        info "检测到根分区文件系统: $fs_type"
+        case "$fs_type" in
+            ext4)
+                e2fsck -f -p "$ROOT_PART"
+                resize2fs "$ROOT_PART"
+                ;;
+            xfs)
+                mnt=$(mktemp -d)
+                mount "$ROOT_PART" "$mnt"
+                xfs_growfs "$mnt"
+                umount "$mnt"
+                rmdir "$mnt"
+                ;;
+            btrfs)
+                mnt=$(mktemp -d)
+                mount "$ROOT_PART" "$mnt"
+                btrfs filesystem resize max "$mnt"
+                umount "$mnt"
+                rmdir "$mnt"
+                ;;
+            *)
+                warn "未知或不支持的文件系统类型，跳过扩容"
+                ;;
+        esac
+
+        # === 修改 UUID ===
+        info ">>> 更新文件系统 UUID..."
+        if [ "$fs_type" = "ext4" ]; then
+            tune2fs -U random "$ROOT_PART"
+        elif [ "$fs_type" = "xfs" ]; then
+            xfs_admin -U generate "$ROOT_PART"
+        elif [ "$fs_type" = "btrfs" ]; then
+            btrfstune -u "$ROOT_PART"
+        fi
+
+        NEW_EFI_UUID=$(blkid -s UUID -o value "$BOOT_PART")
+        NEW_ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
+        info "新的根UUID: $NEW_ROOT_UUID"
+        info "新的EFI UUID: $NEW_EFI_UUID"
+
+        # === 挂载新系统 ===
+        TEMP_ROOT=$(mktemp -d)
+        mount "$ROOT_PART" "$TEMP_ROOT"
+        # 挂载EFI分区前确保目录存在
+        mkdir -p "$TEMP_ROOT/boot/efi"
+        mount "$BOOT_PART" "$TEMP_ROOT/boot/efi"
+
+        # === 更新 grub.cfg 中 UUID ===
+        info ">>> 更新 grub.cfg..."
+        for cfg in "$TEMP_ROOT/boot/efi/EFI"/*/grub.cfg "$TEMP_ROOT/boot/grub/grub.cfg"; do
+            [ -f "$cfg" ] && sed -i -r "s/(search.fs_uuid |--set=root )[a-f0-9-]+/\1${NEW_ROOT_UUID}/" "$cfg" && info "更新了 $cfg"
+            [ -f "$cfg" ] && sed -i -r "s/root=UUID=[a-f0-9-]+/root=UUID=${NEW_ROOT_UUID}/" "$cfg" && info "更新了 $cfg 中的 root=UUID"
+        done
+
+        # === 更新 fstab 中 UUID ===
+        FSTAB_FILE="$TEMP_ROOT/etc/fstab"
+        info ">>> 更新 fstab..."
+        if [ -f "$FSTAB_FILE" ]; then
+            if grep -q "/dev/disk/by-uuid" "$FSTAB_FILE"; then
+                sed -i -r "s|/dev/disk/by-uuid/[^ ]+(\s+/ )|/dev/disk/by-uuid/${NEW_ROOT_UUID}\1|" "$FSTAB_FILE"
+                sed -i -r "s|/dev/disk/by-uuid/[^ ]+(\s+/boot/efi )|/dev/disk/by-uuid/${NEW_EFI_UUID}\1|" "$FSTAB_FILE"
+            elif grep -q "^UUID=" "$FSTAB_FILE"; then
+                sed -i -r "s|UUID=[^ ]+(\s+/ )|UUID=${NEW_ROOT_UUID}\1|" "$FSTAB_FILE"
+                sed -i -r "s|UUID=[^ ]+(\s+/boot/efi )|UUID=${NEW_EFI_UUID}\1|" "$FSTAB_FILE"
+            fi
+            info "更新了 $FSTAB_FILE"
+        fi
+
+        # === 重装 GRUB ===
+        BOOTLOADER_ID="ReinstalledOS" # 使用一个通用的ID
+        info ">>> 安装 grub 引导..."
+        mount_pseudo_fs "$TEMP_ROOT"
+        chroot "$TEMP_ROOT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="$BOOTLOADER_ID" --recheck
+        chroot "$TEMP_ROOT" grub-mkconfig -o /boot/grub/grub.cfg
+        umount_pseudo_fs "$TEMP_ROOT"
+
+        # === 清理多余 EFI 启动项 ===
+        info ">>> 清理 EFI 启动项..."
+        # 获取新创建的启动项编号
+        BOOT_ENTRY=$(efibootmgr | grep -i "$BOOTLOADER_ID" | head -n1 | awk '{print $1}' | sed 's/Boot//;s/\*//')
+        if [ -n "$BOOT_ENTRY" ]; then
+            # 设置为下一次启动项
+            efibootmgr -n "$BOOT_ENTRY"
+            info "设置下一次启动项为: Boot$BOOT_ENTRY"
+        fi
+
+        umount "$TEMP_ROOT/boot/efi"
+        umount "$TEMP_ROOT"
+        rmdir "$TEMP_ROOT"
+
+        info "✅ DDLinux 操作完成！系统即将重启。"
+        reboot
+        exit 0 # 任务完成，退出脚本
+    fi
+    
+    
     # 先检查 modloop 是否正常
     # 防止格式化硬盘后，缺少 ext4 模块导致 mount 失败
     # https://github.com/bin456789/reinstall/issues/136
