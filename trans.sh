@@ -6953,7 +6953,7 @@ trans() {
             DECOMPRESS_CMD="xz -dc \"$COMPRESSED_FILE\""
         elif echo "$img" | grep -q '\.zst$'; then
             apk add --no-cache zstd
-            DECOMPRES_CMD="zstd -dc \"$COMPRESSED_FILE\""
+            DECOMPRESS_CMD="zstd -dc \"$COMPRESSED_FILE\""
         else
             DECOMPRESS_CMD="cat \"$COMPRESSED_FILE\""
         fi
@@ -6969,6 +6969,7 @@ trans() {
 
         # === 强制内核重新读取分区表 (关键修复) ===
         info ">>> 刷新分区表 (DD后)..."
+        apk add --no-cache udev
         update_part
         partprobe "/dev/$xda" || true
         udevadm settle
@@ -7007,6 +7008,9 @@ trans() {
         sync
         info ">>> 再次刷新分区表 (parted后)..."
         update_part; partprobe "/dev/$xda" || true; udevadm settle; sleep 3
+
+        # 扩容完成后不再需要 udev，可以卸载以释放内存
+        apk del udev
 
         # 扩容文件系统
         fs_type=$(blkid -o value -s TYPE "$ROOT_PART")
