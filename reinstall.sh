@@ -4008,7 +4008,13 @@ if [ "$distro" = "ddlinux" ]; then
     is_ddlinux=1 # 设置一个标志，给 trans.sh 使用
     distro=alpine
     hold=1
+    # 如果用户没有指定版本，则自动获取最新的 Alpine 版本
+    if [ -z "$releasever" ]; then
+        releasever=$(get_latest_distro_releasever alpine)
+    fi
+    info "DDLinux mode will be activated in Alpine Live OS v$releasever."
 fi
+
 # 不支持容器虚拟化
 assert_not_in_container
 
