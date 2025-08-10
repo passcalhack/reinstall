@@ -2937,7 +2937,7 @@ build_extra_cmdline() {
     # https://answers.launchpad.net/ubuntu/+question/249456
     # https://salsa.debian.org/installer-team/rootskel/-/blob/master/src/lib/debian-installer-startup.d/S02module-params?ref_type=heads
     for key in confhome hold force force_cn force_old_windows_setup cloud_image main_disk \
-        is_ddlinux \
+        is_ddlinux img \
         elts deb_mirror \
         ssh_port rdp_port web_port allow_ping; do
         value=${!key}
