@@ -6923,32 +6923,37 @@ trans() {
 
         # === 下载镜像文件 ===
         info ">>> 正在下载镜像文件: $img"
-        COMPRESSED_FILE="/tmp/image.compressed"
+        LOCAL_IMG_FILE="/tmp/local_image.img"
+        COMPRESSED_FILE="${LOCAL_IMG_FILE}.compressed"
 
         if ! wget "$img" -O "$COMPRESSED_FILE" --no-check-certificate; then
             error_and_exit "镜像文件下载失败！"
         fi
 
+        info ">>> 如有需要，正在解压镜像..."
+        if echo "$img" | grep -q '\.gz$'; then
+            gzip -dc "$COMPRESSED_FILE" > "$LOCAL_IMG_FILE"
+        elif echo "$img" | grep -q '\.xz$'; then
+            apk add --no-cache xz
+            xz -dc "$COMPRESSED_FILE" > "$LOCAL_IMG_FILE"
+            apk del xz
+        elif echo "$img" | grep -q '\.zst$'; then
+            apk add --no-cache zstd
+            zstd -dc "$COMPRESSED_FILE" > "$LOCAL_IMG_FILE"
+            apk del zstd
+        else
+            # 假设是未压缩的 raw 镜像
+            mv "$COMPRESSED_FILE" "$LOCAL_IMG_FILE"
+        fi
+        rm "$COMPRESSED_FILE"
+
         # === 危险操作警告 ===
         echo "‼️ 警告：即将清空 $xda 并写入镜像..."
         sleep 3
 
-        # === 流式解压并直接写入镜像 ===
-        info ">>> 开始解压并写入镜像..."
-        if echo "$img" | grep -q '\.gz$'; then
-            gzip -dc "$COMPRESSED_FILE" | dd of="/dev/$xda" bs=4M status=progress conv=fsync
-        elif echo "$img" | grep -q '\.xz$'; then
-            apk add --no-cache xz
-            xz -dc "$COMPRESSED_FILE" | dd of="/dev/$xda" bs=4M status=progress conv=fsync
-            apk del xz
-        elif echo "$img" | grep -q '\.zst$'; then
-            apk add --no-cache zstd
-            zstd -dc "$COMPRESSED_FILE" | dd of="/dev/$xda" bs=4M status=progress conv=fsync
-            apk del zstd
-        else
-            # 假设是未压缩的 raw 镜像
-            dd if="$COMPRESSED_FILE" of="/dev/$xda" bs=4M status=progress conv=fsync
-        fi
+        # === 流式解压并直接写入镜像 (已移除 status=progress) ===
+        info ">>> 开始写入镜像..."
+        dd if="$LOCAL_IMG_FILE" of="/dev/$xda" bs=4M conv=fsync
 
         # 检查 dd 命令是否成功
         if [ $? -ne 0 ]; then
@@ -6956,7 +6961,7 @@ trans() {
         fi
 
         sync
-        rm "$COMPRESSED_FILE" # 删除已下载的压缩文件以释放空间
+        rm "$LOCAL_IMG_FILE"
 
         # === 更新分区表信息 ===
         update_part
