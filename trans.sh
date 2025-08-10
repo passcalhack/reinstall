@@ -95,10 +95,10 @@ wget() {
     if command wget 2>&1 | grep -q BusyBox; then
         # busybox wget 没有重试功能
         # 好像默认永不超时
-        retry 5 command wget "$@" -T 10
+        retry 5 command wget --no-check-certificate "$@" -T 10
     else
         # 原版 wget 自带重试功能
-        command wget --tries=5 --progress=bar:force "$@"
+        command wget --no-check-certificate --tries=5 --progress=bar:force "$@"
     fi
 }
 
@@ -6920,35 +6920,55 @@ trans() {
     # 检查是否为 DDLinux 模式
     if [ "$is_ddlinux" = 1 ]; then
         info "DDLinux Mode: Starting disk operations."
-    
+
+        # === 下载镜像文件 ===
+        info ">>> 正在下载镜像文件: $img"
+        LOCAL_IMG_FILE="/tmp/local_image.img"
+        COMPRESSED_FILE="${LOCAL_IMG_FILE}.compressed"
+
+        # 此处的 wget 将调用我们修改过的函数，自动跳过证书验证
+        if ! wget "$img" -O "$COMPRESSED_FILE"; then
+            error_and_exit "镜像文件下载失败！"
+        fi
+        info ">>> 如有需要，正在解压镜像..."
+        if echo "$img" | grep -q '\.gz$'; then
+            gzip -dc "$LOCAL_IMG_FILE.compressed" > "$LOCAL_IMG_FILE"
+        elif echo "$img" | grep -q '\.xz$'; then
+            apk add --no-cache xz
+            xz -dc "$LOCAL_IMG_FILE.compressed" > "$LOCAL_IMG_FILE"
+        elif echo "$img" | grep -q '\.zst$'; then
+            apk add --no-cache zstd
+            zstd -dc "$LOCAL_IMG_FILE.compressed" > "$LOCAL_IMG_FILE"
+        else
+            # 假设是未压缩的 raw 镜像
+            mv "$LOCAL_IMG_FILE.compressed" "$LOCAL_IMG_FILE"
+        fi
+        rm "$LOCAL_IMG_FILE.compressed"
+
         # === 危险操作警告 ===
         echo "‼️ 警告：即将清空 $xda 并写入镜像..."
         sleep 3 # 给 3 秒反悔时间
-    
+
         # === 直接写入镜像 ===
         info ">>> 开始写入镜像..."
-        # 我们使用主脚本中的 img 变量，它已通过内核参数传递进来
-        if echo "$img" | grep -q '\.gz$'; then
-            gzip -dc "$img" | dd of="/dev/$xda" bs=4M status=progress conv=fsync
-        else
-            dd if="$img" of="/dev/$xda" bs=4M status=progress conv=fsync
-        fi
+        dd if="$LOCAL_IMG_FILE" of="/dev/$xda" bs=4M status=progress conv=fsync
         sync
-    
+        rm "$LOCAL_IMG_FILE" # 删除镜像文件以释放空间
+
         # === 更新分区表信息 ===
         update_part
-    
+
         # === 修复 GPT 分区表 ===
         info ">>> 修复 GPT 分区表..."
-        apk add sgdisk
+        apk add --no-cache sgdisk
         sgdisk -e "/dev/$xda"
         apk del sgdisk
         update_part
-    
+
         # 自动识别 EFI 分区和根分区（默认 EFI 是第1分区，根分区是第2分区）
         BOOT_PART="/dev/${xda}1"
         ROOT_PART="/dev/${xda}2"
-    
+
         # 检查分区是否存在
         if ! lsblk "$BOOT_PART" >/dev/null 2>&1; then
             error_and_exit "错误：EFI分区 $BOOT_PART 不存在！"
@@ -6956,25 +6976,25 @@ trans() {
         if ! lsblk "$ROOT_PART" >/dev/null 2>&1; then
             error_and_exit "错误：根分区 $ROOT_PART 不存在！"
         fi
-    
+
         # 扩展根分区到最大
         info ">>> 扩展根分区..."
         parted "/dev/$xda" resizepart 2 100% --script
         sync
         update_part
-    
+
         # 扩容文件系统
         fs_type=$(blkid -o value -s TYPE "$ROOT_PART")
         info "检测到根分区文件系统: $fs_type"
         case "$fs_type" in
             ext4)
-                apk add e2fsprogs-extra
+                apk add --no-cache e2fsprogs-extra
                 e2fsck -f -p "$ROOT_PART"
                 resize2fs "$ROOT_PART"
                 apk del e2fsprogs-extra
                 ;;
             xfs)
-                apk add xfsprogs-extra
+                apk add --no-cache xfsprogs-extra
                 mnt=$(mktemp -d)
                 mount "$ROOT_PART" "$mnt"
                 xfs_growfs "$mnt"
@@ -6983,7 +7003,7 @@ trans() {
                 apk del xfsprogs-extra
                 ;;
             btrfs)
-                apk add btrfs-progs
+                apk add --no-cache btrfs-progs
                 mnt=$(mktemp -d)
                 mount "$ROOT_PART" "$mnt"
                 btrfs filesystem resize max "$mnt"
@@ -6995,45 +7015,44 @@ trans() {
                 warn "未知或不支持的文件系统类型，跳过扩容"
                 ;;
         esac
-    
+
         # === 修改 UUID ===
         info ">>> 更新文件系统 UUID..."
         if [ "$fs_type" = "ext4" ]; then
-            apk add e2fsprogs
+            apk add --no-cache e2fsprogs
             tune2fs -U random "$ROOT_PART"
             apk del e2fsprogs
         elif [ "$fs_type" = "xfs" ]; then
-            apk add xfsprogs
+            apk add --no-cache xfsprogs
             xfs_admin -U generate "$ROOT_PART"
             apk del xfsprogs
         elif [ "$fs_type" = "btrfs" ]; then
-            apk add btrfs-progs
+            apk add --no-cache btrfs-progs
             btrfstune -u "$ROOT_PART"
             apk del btrfs-progs
         fi
-    
+
         NEW_EFI_UUID=$(blkid -s UUID -o value "$BOOT_PART")
         NEW_ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
         info "新的根UUID: $NEW_ROOT_UUID"
         info "新的EFI UUID: $NEW_EFI_UUID"
-    
+
         # === 挂载新系统 ===
         TEMP_ROOT=$(mktemp -d)
         mount "$ROOT_PART" "$TEMP_ROOT"
         mkdir -p "$TEMP_ROOT/boot/efi"
         mount "$BOOT_PART" "$TEMP_ROOT/boot/efi"
-    
+
         # === 更新 grub.cfg 中 UUID ===
         info ">>> 更新 grub.cfg..."
         for cfg in "$TEMP_ROOT/boot/efi/EFI"/*/grub.cfg "$TEMP_ROOT/boot/grub/grub.cfg"; do
             if [ -f "$cfg" ]; then
-                # 兼容 search --fs-uuid 和 root=UUID=
                 sed -i -r "s/(search.fs_uuid |--set=root )[a-fA-F0-9-]+/\1${NEW_ROOT_UUID}/" "$cfg"
                 sed -i -r "s/root=UUID=[a-fA-F0-9-]+/root=UUID=${NEW_ROOT_UUID}/" "$cfg"
                 info "已更新 $cfg"
             fi
         done
-    
+
         # === 更新 fstab 中 UUID ===
         FSTAB_FILE="$TEMP_ROOT/etc/fstab"
         info ">>> 更新 fstab..."
@@ -7047,15 +7066,17 @@ trans() {
             fi
             info "已更新 $FSTAB_FILE"
         fi
-    
+
         # === 重装 GRUB ===
         BOOTLOADER_ID="ReinstalledOS" # 使用一个通用的ID
         info ">>> 安装 grub 引导..."
         mount_pseudo_fs "$TEMP_ROOT"
+        apk add --no-cache grub-efi efibootmgr
         chroot "$TEMP_ROOT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="$BOOTLOADER_ID" --recheck
         chroot "$TEMP_ROOT" grub-mkconfig -o /boot/grub/grub.cfg
+        apk del grub-efi efibootmgr
         umount_pseudo_fs "$TEMP_ROOT"
-    
+
         # === 清理多余 EFI 启动项 ===
         info ">>> 清理 EFI 启动项..."
         BOOT_ENTRY=$(efibootmgr | grep -i "$BOOTLOADER_ID" | head -n1 | awk '{print $1}' | sed 's/Boot//;s/\*//')
@@ -7063,15 +7084,17 @@ trans() {
             efibootmgr -n "$BOOT_ENTRY"
             info "设置下一次启动项为: Boot$BOOT_ENTRY"
         fi
-    
+
         umount "$TEMP_ROOT/boot/efi"
         umount "$TEMP_ROOT"
         rmdir "$TEMP_ROOT"
-    
+
         info "✅ DDLinux 操作完成！系统即将重启。"
+        info "done"
+        sleep 5
         reboot
         exit 0 # 任务完成，正常退出
-    fi    
+    fi
     
     # 先检查 modloop 是否正常
     # 防止格式化硬盘后，缺少 ext4 模块导致 mount 失败
