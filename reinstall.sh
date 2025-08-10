@@ -1877,7 +1877,7 @@ verify_os_name() {
 verify_os_args() {
     case "$distro" in
     dd) [ -n "$img" ] || error_and_exit "dd need --img" ;;
-    ddlinux) [ -n "$img" ] || error_and_exit "ddlinux need --img" ;
+    ddlinux) [ -n "$img" ] || error_and_exit "ddlinux need --img" ;;
     redhat) [ -n "$img" ] || error_and_exit "redhat need --img" ;;
     windows) [ -n "$image_name" ] || error_and_exit "Install Windows need --image-name." ;;
     esac
