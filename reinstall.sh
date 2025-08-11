@@ -2989,45 +2989,41 @@ build_nextos_cmdline() {
     if [ $nextos_distro = alpine ]; then
         nextos_cmdline="alpine_repo=$nextos_repo modloop=$nextos_modloop"
     elif is_distro_like_debian $nextos_distro; then
-        # 关键修复：如果是 Debian Live 模式，则直接添加 rescue/enable=true 参数
+        # 关键修复：为 Debian Live 模式构建一套完整的自动化救援参数
         if is_debian_live; then
-            nextos_cmdline="rescue/enable=true"
+            info "Configuring kernel cmdline for Debian Live Rescue Shell..."
+            # 这套参数会自动回答救援模式的所有问题，并直接运行shell
+            nextos_cmdline="rescue/enable=true auto=true priority=critical locale=en_US keyboard-configuration/xkb-keymap=us netcfg/dhcp_autoconfig=true -- -s"
         else
+            # 这是正常的自动安装流程
             nextos_cmdline="lowmem/low=1 auto=true priority=critical"
             nextos_cmdline+=" url=$nextos_ks"
             nextos_cmdline+=" mirror/http/hostname=${nextos_udeb_mirror%/*}"
             nextos_cmdline+=" mirror/http/directory=/${nextos_udeb_mirror##*/}"
             nextos_cmdline+=" base-installer/kernel/image=$nextos_kernel"
-            # elts 的 debian 不能用 security 源，否则安装过程会提示无法访问
             if [ "$nextos_distro" = debian ] && is_debian_elts; then
                 nextos_cmdline+=" apt-setup/services-select="
             fi
-            # kali 安装好后网卡是 eth0 这种格式，但安装时不是
             if [ "$nextos_distro" = kali ]; then
                 nextos_cmdline+=" net.ifnames=0"
                 nextos_cmdline+=" simple-cdd/profiles=kali"
             fi
-        fi # 结束 is_debian_live 的判断
+        fi
     elif is_distro_like_redhat $nextos_distro; then
         # redhat
         nextos_cmdline="root=live:$nextos_squashfs inst.ks=$nextos_ks"
     fi
 
+    # 为所有模式添加通用的 tty 参数
     if is_distro_like_debian $nextos_distro; then
         if [ "$basearch" = "x86_64" ]; then
-            # debian installer 好像第一个 tty 是主 tty
-            # 设置ttyS0,tty0,安装界面还是显示在ttyS0
-            :
+            : # x86_64 d-i 默认行为良好
         else
-            # debian arm 在没有ttyAMA0的机器上（aws t4g），最少要设置一个tty才能启动
-            # 只设置tty0也行，但安装过程ttyS0没有显示
             nextos_cmdline+=" $(echo_tmp_ttys)"
         fi
     else
         nextos_cmdline+=" $(echo_tmp_ttys)"
     fi
-    # nextos_cmdline+=" mem=256M"
-    # nextos_cmdline+=" lowmem=+1"
 }
 
 build_cmdline() {
