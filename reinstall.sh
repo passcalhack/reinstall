@@ -2989,20 +2989,25 @@ build_nextos_cmdline() {
     if [ $nextos_distro = alpine ]; then
         nextos_cmdline="alpine_repo=$nextos_repo modloop=$nextos_modloop"
     elif is_distro_like_debian $nextos_distro; then
-        nextos_cmdline="lowmem/low=1 auto=true priority=critical"
-        nextos_cmdline+=" url=$nextos_ks"
-        nextos_cmdline+=" mirror/http/hostname=${nextos_udeb_mirror%/*}"
-        nextos_cmdline+=" mirror/http/directory=/${nextos_udeb_mirror##*/}"
-        nextos_cmdline+=" base-installer/kernel/image=$nextos_kernel"
-        # elts 的 debian 不能用 security 源，否则安装过程会提示无法访问
-        if [ "$nextos_distro" = debian ] && is_debian_elts; then
-            nextos_cmdline+=" apt-setup/services-select="
-        fi
-        # kali 安装好后网卡是 eth0 这种格式，但安装时不是
-        if [ "$nextos_distro" = kali ]; then
-            nextos_cmdline+=" net.ifnames=0"
-            nextos_cmdline+=" simple-cdd/profiles=kali"
-        fi
+        # 关键修复：如果是 Debian Live 模式，则直接添加 rescue/enable=true 参数
+        if is_debian_live; then
+            nextos_cmdline="rescue/enable=true"
+        else
+            nextos_cmdline="lowmem/low=1 auto=true priority=critical"
+            nextos_cmdline+=" url=$nextos_ks"
+            nextos_cmdline+=" mirror/http/hostname=${nextos_udeb_mirror%/*}"
+            nextos_cmdline+=" mirror/http/directory=/${nextos_udeb_mirror##*/}"
+            nextos_cmdline+=" base-installer/kernel/image=$nextos_kernel"
+            # elts 的 debian 不能用 security 源，否则安装过程会提示无法访问
+            if [ "$nextos_distro" = debian ] && is_debian_elts; then
+                nextos_cmdline+=" apt-setup/services-select="
+            fi
+            # kali 安装好后网卡是 eth0 这种格式，但安装时不是
+            if [ "$nextos_distro" = kali ]; then
+                nextos_cmdline+=" net.ifnames=0"
+                nextos_cmdline+=" simple-cdd/profiles=kali"
+            fi
+        fi # 结束 is_debian_live 的判断
     elif is_distro_like_redhat $nextos_distro; then
         # redhat
         nextos_cmdline="root=live:$nextos_squashfs inst.ks=$nextos_ks"
