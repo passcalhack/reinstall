@@ -251,6 +251,10 @@ is_alpine_live() {
     [ "$distro" = alpine ] && [ "$hold" = 1 ]
 }
 
+is_debian_live() {
+    [ "$distro" = debian ] && [ "$hold" = 1 ]
+}
+
 is_have_initrd() {
     ! is_netboot_xyz
 }
@@ -4494,6 +4498,8 @@ if is_netboot_xyz; then
     echo 'Reboot to start netboot.xyz.'
 elif is_alpine_live; then
     echo 'Reboot to start Alpine Live OS.'
+elif is_debian_live; then
+    echo 'Reboot to start Debian Live OS.'
 elif is_use_dd; then
     echo 'Reboot to start DD.'
 elif [ "$distro" = fnos ]; then
