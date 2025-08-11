@@ -67,6 +67,11 @@ is_run_from_locald() {
     [[ "$0" = "/etc/local.d/*" ]]
 }
 
+is_debian_live() {
+    # 我们通过检查 extra_hold=1 和 finalos_distro 是否为 debian 来判断
+    [ "$hold" = 1 ] && [ "$finalos_distro" = debian ]
+}
+
 add_community_repo() {
     # 先检查原来的repo是不是egde
     if grep -q '^http.*/edge/main$' /etc/apk/repositories; then
